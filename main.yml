@@ -1,7 +1,9 @@
 ---
 - name: Build Kubernetes Cluster
   hosts: all
+  become_user: root
   become_method: sudo
+  become: true
   vars:
     support_packages:
       - containerd
