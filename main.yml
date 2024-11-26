@@ -1,0 +1,169 @@
+---
+- name: Build Kubernetes Cluster
+  hosts: all
+  become_method: sudo
+  vars:
+    support_packages:
+      - containerd
+      # - cri-o
+      # - cri-tools
+      - jq
+      - iproute-tc
+
+    kube_packages:
+      - kubeadm
+      - kubectl
+      - kubelet
+
+    files:
+      - { source: 'modules_load_containerd.conf', destination: '/etc/modules-load.d/containerd.conf'}
+      - { source: 'sysctl_k8s.conf', destination: '/etc/sysctl.d/k8s.conf'}
+      - { source: 'yum_repo_kubernetes.repo', destination: '/etc/yum.repos.d/kubernetes.repo'}
+      - { source: 'containerd_config.toml', destination: '/etc/containerd/config.toml'}
+      - { source: 'tmp_calico.yaml', destination: '/tmp/calico.yaml'}
+
+    ports:
+      - "6443"
+      - "10250"
+      - "10248"
+
+  tasks:
+
+### SYSTEM PREP ###
+    - name: Disable Swap
+      ansible.builtin.shell:
+        cmd: "{{ item }}"
+      loop:
+        - swapoff -a
+        - systemctl stop dev-zram0.swap
+        # - systemctl disable dev-zram0.swap
+
+      ignore_errors: true
+
+    - name: Remove zram
+      ansible.builtin.dnf:
+        name: zram-generator
+        state: absent
+
+    - name: Open firewall ports
+      ansible.builtin.shell:
+        # cmd: firewall-cmd --permanent --zone=public --add-port={{ item }}/tcp
+        cmd: systemctl {{ item }} firewalld
+      # loop: "{{ ports }}"
+      loop:
+        - stop
+        - disable
+      ignore_errors: true
+
+    - name: Reboot
+      ansible.builtin.reboot:
+
+    - name: Install support packages
+      ansible.builtin.dnf:
+        name: "{{ item }}"
+        state: present
+
+      loop: "{{ support_packages }}"
+
+    - name: Copy files
+      ansible.builtin.copy:
+        src: "./srcFiles/{{ item.source }}"
+        dest: "{{ item.destination }}"
+        owner: root
+        group: root
+        mode: '0755'
+      loop: "{{ files }}"
+
+    - name: Modprobe
+      ansible.builtin.command:
+        cmd: modprobe "{{ item }}"
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Systemctl
+      ansible.builtin.shell:
+        cmd: sysctl --system
+
+    # The next 2 steps fix the following bug by creating a symlink
+    # https://bugzilla.redhat.com/show_bug.cgi?id=1731597
+    - name: Create CNI Directory
+      ansible.builtin.file:
+        path: /opt/cni/
+        owner: root
+        group: root
+        mode: '0755'
+        state: directory
+
+    - name: Symlink CNIs
+      ansible.builtin.file:
+        src: /usr/libexec/cni
+        dest: /opt/cni/bin
+        force: true
+        state: link
+
+    - name: Start containerd
+      ansible.builtin.shell:
+        cmd: "{{ item }}"
+      loop:
+        - systemctl enable containerd
+        - systemctl start containerd
+
+    - name: DNF clean all
+      ansible.builtin.shell:
+        cmd: dnf clean all
+
+    - name: Install kubernetes packages
+      ansible.builtin.dnf:
+        name: "{{ item }}"
+        disable_excludes: kubernetes
+        state: present
+      loop: "{{ kube_packages }}"
+
+    - name: Enable kubelet
+      ansible.builtin.shell:
+        cmd: systemctl enable kubelet
+
+    - name: Init Cluster
+      ansible.builtin.shell:
+        cmd: kubeadm init
+      when: inventory_hostname in groups['kubeMaster']
+
+    - name: Export KUBECONFIG
+      ansible.builtin.shell:
+        cmd: "{{ item }}"
+      loop:
+        - mkdir -p $HOME/.kube
+        - cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+        - chown $(id -u):$(id -g) $HOME/.kube/config
+        - echo "export KUBECONFIG=/etc/kubernetes/admin.conf" >> $HOME/.bash_profile
+      when: inventory_hostname in groups['kubeMaster']
+
+    - name: Install Calico
+      ansible.builtin.shell:
+        cmd: kubectl apply -f '/tmp/calico.yaml'
+      when: inventory_hostname in groups['kubeMaster']
+
+    - name: Print Join command
+      ansible.builtin.shell:
+        cmd: kubeadm token create --print-join-command
+      when: inventory_hostname in groups['kubeMaster']
+      register: results
+
+    - name: Set Join Fact
+      ansible.builtin.set_fact:
+        joincommand: "{{ results.stdout }}"
+      delegate_to: localhost
+      delegate_facts: true
+      when: inventory_hostname in groups['kubeMaster']
+
+    - name: Debug
+      ansible.builtin.debug:
+        #msg: "{{ results.stdout }}"
+        msg: "{{ hostvars['localhost']['joincommand'] }}"
+
+    - name: Join Nodes to Cluster
+      ansible.builtin.shell:
+        # cmd: "{{ results.stdout }}"
+        cmd: "{{ hostvars['localhost']['joincommand'] }}"
+      when: inventory_hostname in groups['kubeNodes']
