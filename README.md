@@ -11,4 +11,4 @@ for the manual steps.
 ### Usage
 
 * Edit your inventory file and enter your Kubernetes master and  node machines under the appropriate sections.
-* Execute: ansible-playbook main.yml -i inventory -u <user> --ask-pass
+* Execute: ansible-playbook main.yml -i inventory -u {USER} --ask-pass
