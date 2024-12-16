@@ -4,7 +4,7 @@
 
 Ansible script that installs a Kubernetes cluster on fedora machines. Hopefully it would work on any RHEL based distro.
 
-See: [https://www.relay70.com/2024/10/03/kubernetes-fedora-39/](https://www.relay70.com/2024/10/03/kubernetes-fedora-39)
+See: [https://www.relay70.com/kubernetes-fedora-39/](https://www.relay70.com/kubernetes-fedora-39)
 
 for the manual steps.
 
